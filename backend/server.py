@@ -206,13 +206,20 @@ async def chat(request: ChatRequest):
             detail="OpenRouter API request timed out. Please try again."
         )
     except Exception as e:
-        print(f"❌ Chat error: {str(e)}")
+        error_msg = str(e)
+        print(f"❌ Chat error: {error_msg}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Chat processing error: {str(e)}"
-        )
+
+        # More helpful error messages
+        if "OPENROUTER_API_KEY" in error_msg:
+            detail = "OpenRouter API key not configured. Set OPENROUTER_API_KEY in backend/.env"
+        elif "httpx" in error_msg or "import" in error_msg:
+            detail = "Backend dependency issue. Run: pip install -r requirements.txt"
+        else:
+            detail = f"Chat processing error: {error_msg}"
+
+        raise HTTPException(status_code=500, detail=detail)
 
 if __name__ == "__main__":
     import uvicorn
