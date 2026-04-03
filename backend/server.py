@@ -2,15 +2,12 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
-import asyncio
 import os
 from dotenv import load_dotenv
 from supabase import create_client, Client
+import httpx
 
 load_dotenv()
-
-# Import emergent integrations for LLM
-from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 app = FastAPI(title="InventoryPro Chatbot API")
 
@@ -26,9 +23,17 @@ app.add_middleware(
 # Supabase client
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://grkfoepzoqhloxanexmb.supabase.co")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imdya2ZvZXB6b3FobG94YW5leG1iIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NDc1NjI4MiwiZXhwIjoyMDkwMzMyMjgyfQ.95StP-il6HMseMVbMPsyEfCJKHcjwEysFCshKBoZ-s0")
-EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY", "sk-emergent-0614c65100c6d01374")
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+
+if not OPENROUTER_API_KEY:
+    print("⚠️  WARNING: OPENROUTER_API_KEY not set in environment variables")
+    print("Get your API key from: https://openrouter.ai/settings/keys")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# OpenRouter API Configuration
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+OPENROUTER_MODEL = "openai/gpt-4o-mini"
 
 class Message(BaseModel):
     role: str
@@ -130,37 +135,84 @@ async def health():
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
+    """
+    Chat endpoint that uses OpenRouter API for LLM inference.
+    Docs: https://openrouter.ai/docs
+    """
     try:
+        # Validate API key
+        if not OPENROUTER_API_KEY:
+            raise HTTPException(
+                status_code=500,
+                detail="OPENROUTER_API_KEY not configured. Get it from: https://openrouter.ai/settings/keys"
+            )
+
         # Get fresh inventory context
         inventory_context = await get_inventory_context()
-        
         full_system = f"{SYSTEM_PROMPT}\n\n## Current Database State:\n{inventory_context}"
-        
-        # Initialize chat with emergent integrations
+
+        # Generate session ID
         import uuid
         session_id = request.sessionId or str(uuid.uuid4())
-        
-        chat = LlmChat(
-            api_key=EMERGENT_KEY,
-            session_id=session_id,
-            system_message=full_system
+
+        # Build conversation messages
+        messages = [
+            {"role": msg.role, "content": msg.content}
+            for msg in request.messages
+        ]
+
+        # Call OpenRouter API
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{OPENROUTER_BASE_URL}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                    "HTTP-Referer": "https://inventorypro.local",
+                    "X-OpenRouter-Title": "InventoryPro Chatbot",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": OPENROUTER_MODEL,
+                    "messages": [
+                        {"role": "system", "content": full_system},
+                        *messages
+                    ],
+                    "temperature": 0.7,
+                    "max_tokens": 1000,
+                },
+                timeout=30.0
+            )
+
+            if response.status_code != 200:
+                error_detail = response.text
+                print(f"❌ OpenRouter API Error: {response.status_code}")
+                print(f"Response: {error_detail}")
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"OpenRouter API error: {error_detail}"
+                )
+
+            data = response.json()
+            assistant_message = data["choices"][0]["message"]["content"]
+
+            return ChatResponse(
+                message=assistant_message,
+                sessionId=session_id
+            )
+
+    except httpx.TimeoutException:
+        raise HTTPException(
+            status_code=504,
+            detail="OpenRouter API request timed out. Please try again."
         )
-        chat.with_model("openai", "gpt-4o-mini")
-        
-        # Build conversation history for context
-        for msg in request.messages[:-1]:
-            if msg.role == "user":
-                await chat.send_message(UserMessage(text=msg.content))
-        
-        # Send the latest message
-        latest_message = request.messages[-1]
-        response = await chat.send_message(UserMessage(text=latest_message.content))
-        
-        return ChatResponse(message=response, sessionId=session_id)
-        
     except Exception as e:
-        print(f"Chat error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"❌ Chat error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Chat processing error: {str(e)}"
+        )
 
 if __name__ == "__main__":
     import uvicorn

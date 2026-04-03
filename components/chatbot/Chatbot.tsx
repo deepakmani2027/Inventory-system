@@ -88,10 +88,11 @@ export default function Chatbot() {
 
     } catch (error) {
       console.error('Chat error:', error)
+      const errorResponse = error instanceof Error ? error.message : 'Unknown error'
       const errorMessage: Message = {
         id: crypto.randomUUID(),
         role: 'assistant',
-        content: 'Sorry, I encountered an error. Please try again.',
+        content: `Sorry, I encountered an error: ${errorResponse}\n\n💡 Tip: Make sure the backend is running on port 8001 and OPENROUTER_API_KEY is set in backend/.env`,
         timestamp: new Date()
       }
       setMessages(prev => [...prev, errorMessage])
