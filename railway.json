@@ -4,7 +4,11 @@
     "backend": {
       "startCommand": "cd backend && python server.py",
       "nixpacksPkgs": ["python3", "python3Packages.pip"],
-      "root": "backend"
+      "root": "backend",
+      "buildCommand": "pip install -r requirements.txt"
     }
+  },
+  "env": {
+    "PORT": "8001"
   }
 }
