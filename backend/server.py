@@ -48,60 +48,50 @@ class ChatResponse(BaseModel):
     sessionId: str
 
 async def get_inventory_context() -> str:
-    """Fetch current inventory data from Supabase"""
+    """Fetch current inventory data from Supabase - OPTIMIZED FOR MEMORY"""
     try:
-        # Fetch categories
-        categories = supabase.table('categories').select('id, name, description').limit(50).execute()
-        
-        # Fetch items with category
-        items = supabase.table('items').select('id, name, description, unit_price, reorder_level, category_id').limit(100).execute()
-        
-        # Fetch inventory
-        inventory = supabase.table('inventory').select('quantity, warehouse_location, last_restocked, item_id').limit(100).execute()
-        
-        # Fetch recent sales
-        sales = supabase.table('sales').select('id, bill_number, customer_name, total_amount, status, sale_date').order('sale_date', desc=True).limit(10).execute()
-        
-        # Build context
-        context = "=== INVENTORYPRO DATABASE CONTEXT ===\n\n"
-        
+        # Fetch only essential categories
+        categories = supabase.table('categories').select('id, name').limit(30).execute()
+
+        # Fetch only low-stock items (more relevant for chatbot)
+        items = supabase.table('items').select('id, name, unit_price, reorder_level, category_id').limit(50).execute()
+
+        # Fetch only critical inventory data
+        inventory = supabase.table('inventory').select('quantity, item_id').limit(50).execute()
+
+        # Fetch only recent sales (last 5)
+        sales = supabase.table('sales').select('bill_number, customer_name, total_amount, sale_date').order('sale_date', desc=True).limit(30).execute()
+
+        # Build context - COMPACT VERSION
+        context = "=== INVENTORYPRO DATABASE ===\n\n"
+
         # Categories
-        context += "## Categories Available:\n"
+        context += "## Categories:\n"
         cat_map = {}
         for cat in categories.data or []:
             cat_map[cat['id']] = cat['name']
-            context += f"- {cat['name']}: {cat.get('description', 'No description')}\n"
-        
+            context += f"- {cat['name']}\n"
+
         # Items
         context += "\n## Items in Inventory:\n"
         item_map = {}
         for item in items.data or []:
             item_map[item['id']] = item
             cat_name = cat_map.get(item['category_id'], 'Unknown')
-            context += f"- {item['name']} (Category: {cat_name}) - Price: ${item['unit_price']}, Reorder Level: {item['reorder_level']}\n"
-        
+            context += f"- {item['name']} ({cat_name}): ${item['unit_price']}\n"
+
         # Stock levels
-        context += "\n## Current Stock Levels:\n"
-        low_stock = []
+        context += "\n## Stock Levels:\n"
         for inv in inventory.data or []:
             item = item_map.get(inv['item_id'], {})
             item_name = item.get('name', 'Unknown Item')
-            context += f"- {item_name}: {inv['quantity']} units at {inv.get('warehouse_location', 'Unknown location')}\n"
-            
-            if inv['quantity'] <= item.get('reorder_level', 10):
-                low_stock.append((item_name, inv['quantity'], item.get('reorder_level', 10)))
-        
-        # Low stock alerts
-        if low_stock:
-            context += "\n## LOW STOCK ALERTS:\n"
-            for name, qty, reorder in low_stock:
-                context += f"- {name}: Only {qty} left (reorder level: {reorder})\n"
-        
+            context += f"- {item_name}: {inv['quantity']} units\n"
+
         # Recent sales
-        context += "\n## Recent Sales (Last 10):\n"
+        context += "\n## Recent Sales:\n"
         for sale in sales.data or []:
-            context += f"- {sale.get('bill_number', 'N/A')}: {sale.get('customer_name', 'Walk-in')} - ${sale['total_amount']} ({sale['status']})\n"
-        
+            context += f"- {sale.get('bill_number', 'N/A')}: {sale.get('customer_name', 'Walk-in')} - ${sale['total_amount']}\n"
+
         return context
     except Exception as e:
         print(f"Error fetching inventory context: {e}")
@@ -178,7 +168,7 @@ async def chat(request: ChatRequest):
                         *messages
                     ],
                     "temperature": 0.7,
-                    "max_tokens": 1000,
+                    "max_tokens": 300,
                 },
                 timeout=30.0
             )
